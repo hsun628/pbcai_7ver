@@ -18,7 +18,7 @@ SESSION_CONFIGS = [
         name = 'team_reasoning_llm_p_beauty',
         display_name = "team_reasoning_llm_p_beauty",
         num_demo_participants = 4 if DEBUG else num_participant,
-        app_sequence = ['phase1', 'phase2', 'phase3', 'phase_AI', 'phase_AI_2','after_questionaire'],
+        app_sequence = ['phase1', 'phase2', 'phase3', 'phase_AI','after_questionaire'],
     ),
 ]
 

@@ -28,6 +28,37 @@ class C(BaseConstants):
     Pass_Reward = 100 # the payoff for players who pass the reason assessment
     reasoning_rounds = [1, 3] if DEBUG else [1, 5, 10]
 
+    PHASE_CONFIG = [
+        {
+            'experimental_rules': 
+            f"""
+            * Part II consists of 10 rounds. At the beginning, the computer randomly divides all participants into groups, and the number of participants in each group will be displayed on the screen.
+            * In each round, you must choose an integer between 0 and 100.
+            * The average of all numbers chosen by participants in your group is called the "Average Number."
+            * The person whose choice is closest to **0.7 times the Average Number** (called the "Target Number") is the "Decision Winner" of the round. In the event of a tie, the computer will randomly select one winner.
+            * After each round ends, the computer will display the past "Average Number" and "Target Number" for your group.""",
+
+            'history_key': 'reason_history',
+            'payoff_prefix': 'phase2',
+            "payoff_var": "total_phase2_payoff",
+            'var_prefix': ''
+        },
+        {
+            'experimental_rules':
+            f"""
+            * Part III consists of 10 rounds. Your group members are exactly the same as in Part II. The number of participants in each group will be displayed on the screen.
+            * In each round, you must choose an integer between 100 and 200.
+            * The average of all numbers chosen by participants in your group is called the "Average Number."
+            * The person whose choice is closest to **1.3 times the Average Number** (called the "Target Number") is the "Decision Winner" of the round. In the event of a tie, the computer will randomly select one winner.
+            * After each round ends, the computer will display the "Average Number" and "Target Number" for your group.""",
+
+            'history_key': 'reason_history_2',
+            'payoff_prefix': 'phase3',
+            "payoff_var": "total_phase3_payoff",
+            'var_prefix': '_2'
+        }
+    ]
+
 class Subsession(BaseSubsession):
     pass
 
@@ -41,103 +72,106 @@ class Player(BasePlayer):
     gpt_reason = models.LongStringField()
     gpt_analysis = models.LongStringField() 
     winner_type = models.StringField()
+    payoff_adj = models.CurrencyField()
     is_flipped = models.BooleanField()
+    
+
+    gpt_reason_2 = models.LongStringField()
+    gpt_analysis_2 = models.LongStringField() 
+    winner_type_2 = models.StringField()
+    payoff_adj_2 = models.CurrencyField()
+    is_flipped_2 = models.BooleanField()
+    
+
     is_gpt_finished = models.BooleanField(initial = False)
 
     def gpt_process(self, p_vars):
         p_id = p_vars.get("id_in_subsession")
+        results = {}
+        db_data = {}
 
         if p_vars.get("reason_history"):
             _thread_storage[p_id] = {"status": "already_finished"}
             return
 
-        history = []
-        round_data = {}
-        # adjust_payoffs = {}
-        phase2_payoff = p_vars.get("phase2_round_payoffs")
-        final_payoff = {r: cu(phase2_payoff.get(r)) for r in range(1, C.NUM_ROUNDS + 1)}
+        for config in C.PHASE_CONFIG:
+            phase_id = config["payoff_prefix"]
 
-        time.sleep((p_vars.get("id_in_subsession", 1) - 1) * 0.5)
+            history = []
+            round_data = {}
+            prefix = config["var_prefix"]
+            phase_payoff = p_vars.get(f"{config["payoff_prefix"]}_round_payoffs", {})
+            final_payoff = {r: cu(phase_payoff.get(r)) for r in range(1, C.NUM_ROUNDS + 1)}
 
-        for r in C.reasoning_rounds:
-            human_reason = p_vars.get(f"reason_{r}", "").strip()
-            human_decision = p_vars.get(f'decision_{r}')
-            is_luckywinner = p_vars.get(f"is_luckywinner_{r}")
-            luckywinner_text = "是" if is_luckywinner else "否"
+            time.sleep((p_id - 1) * 0.5)
 
-            print(f"=====當前處理回合 {r} - 受試者{p_vars.get("id_in_subsession")} =====")
-            print(f"human_decision: {human_decision}")
-            print(f"human_reason: '{human_reason}'")
+            for r in C.reasoning_rounds:
+                human_reason = p_vars.get(f"reason{prefix}_{r}", "").strip()
+                human_decision = p_vars.get(f'decision{prefix}_{r}')
+                is_luckywinner = p_vars.get(f"is_luckywinner{prefix}_{r}")
+                luckywinner_text = "是" if is_luckywinner else "否"
 
-            if human_reason and human_decision is not None:
-                try:
-                    print(f"受試者{p_vars.get("id_in_subsession")} 正在呼叫API")
+                print(f"=====當前處理回合 {r} - 受試者{p_vars.get("id_in_subsession")} =====")
+                print(f"human_decision: {human_decision}")
+                print(f"human_reason: '{human_reason}'")
+
+                if human_reason and human_decision is not None:
+                    try:
+                        print(f"受試者{p_id} 正在呼叫API")
                     
-                    # target_player = self.in_round(r)
-                    target_is_flipped = random.choice([True, False])
+                        target_is_flipped = random.choice([True, False])
 
-                    gpt_reason = gpt_generate(r, human_decision)
-                    winner_type, gpt_analysis = gpt_judge(human_reason, gpt_reason, target_is_flipped)
+                        gpt_reason = gpt_generate(config["experimental_rules"], r, human_decision)
+                        winner_type, gpt_analysis = gpt_judge(config["experimental_rules"], human_reason, gpt_reason, target_is_flipped)
 
-                    # target_player.gpt_reason = gpt_reason
-                    # target_player.gpt_analysis = gpt_analysis
-                    # target_player.winner_type = winner_type
+                        if winner_type in ["Human", "Tie"]:
+                            final_payoff[r] = cu(C.Pass_Reward)
+                            payoff_adj = cu(C.Pass_Reward) - cu(p_vars.get(f"payoff{prefix}_{r}"))
+                            result_text = "您的理由較具體"
+                        else:
+                            final_payoff[r] = cu(0)
+                            payoff_adj = - cu(p_vars.get(f"payoff{prefix}_{r}"))
+                            result_text = "AI生成的理由較具體"
 
-                    if winner_type in ["Human", "Tie"]:
-                        final_payoff[r] = cu(C.Pass_Reward)
-                        # adjust_payoffs[r] = cu(C.Pass_Reward) - cu(p_vars.get(f"payoff_{r}"))
-                        current_round_payoff = cu(C.Pass_Reward) - cu(p_vars.get(f"payoff_{r}"))
-                        result_text = "您的理由較具體"
-                    else:
-                        final_payoff[r] = cu(0)
-                        # adjust_payoffs[r] = - cu(p_vars.get(f"payoff_{r}"))
-                        current_round_payoff = - cu(p_vars.get(f"payoff_{r}"))
-                        result_text = "AI生成的理由較具體"
+                        round_data[r] = {
+                            "is_flipped": target_is_flipped,
+                            "gpt_reason": gpt_reason,
+                            "gpt_analysis": gpt_analysis,
+                            "winner_type": winner_type,
+                            "payoff_adj": payoff_adj
+                        }
 
-                    # self.in_round(r).payoff = adjust_payoffs[r]
+                        history.append({
+                            "round": r,
+                            "human_reason": human_reason,
+                            "gpt_reason": gpt_reason,
+                            "winner_type": winner_type,
+                            "luckywinner_text": luckywinner_text,
+                            "result_text": result_text,
+                            "final_payoff": final_payoff[r] 
+                        })
 
-                    round_data[r] = {
-                        "is_flipped": target_is_flipped,
-                        "gpt_reason": gpt_reason,
-                        "gpt_analysis": gpt_analysis,
-                        "winner_type": winner_type,
-                        "payoff": current_round_payoff
-                    }
+                        print(f"API呼叫成功 - winner: {winner_type}")
 
-                    history.append({
-                        "round": r,
-                        "human_reason": human_reason,
-                        "gpt_reason": gpt_reason,
-                        "winner_type": winner_type,
-                        "luckywinner_text": luckywinner_text,
-                        "result_text": result_text,
-                        "final_payoff": final_payoff[r] 
-                    })
+                    except Exception as e:
+                        print(f"Round_{r} API呼叫失敗: {e}")
 
-                    print(f"API呼叫成功 - winner: {winner_type}")
+            total_phase_payoff = sum(final_payoff.values())
 
-                except Exception as e:
-                    print(f"Round_{r} API呼叫失敗: {e}")
-
-        total_phase2_payoff = sum(final_payoff.values())
-
-        #self.participant.vars["total_phase2_payoff"] = total_phase2_payoff
-        #self.participant.vars["reason_history"] = history
-
-        #self.is_gpt_finished = True
-        #self.save()
+            results[config['history_key']] = history
+            results[config['payoff_var']] = total_phase_payoff
+            db_data[phase_id] = round_data
 
         _thread_storage[p_id] = {
             "status": "done",
-            "history": history,
-            "total_phase2_payoff": total_phase2_payoff,
-            "round_data": round_data
+            "data": results,
+            "db": db_data
         } 
 
 
 ########################################################################################################################
 
-def gpt_generate(round_number, participant_decision):
+def gpt_generate(experimental_rules ,round_number, participant_decision):
 
     generate_prompt = f"""
 
@@ -156,11 +190,7 @@ def gpt_generate(round_number, participant_decision):
                 * The reasoning should be in accordance with the provided round number.
 
         ### Experimental Rules:
-            * Part II consists of 10 rounds. At the beginning, the computer randomly divides all participants into groups, and the number of participants in each group will be displayed on the screen.
-            * In each round, you must choose an integer between 0 and 100.
-            * The average of all numbers chosen by participants in your group is called the "Average Number."
-            * The person whose choice is closest to **0.7 times the Average Number** (called the "Target Number") is the "Decision Winner" of the round. In the event of a tie, the computer will randomly select one winner.
-            * After each round ends, the computer will display the past "Average Number" and "Target Number" for your group.
+            {experimental_rules}
             
         ### Response Format:
             Please provide the participant's decision and the reasoning (in Traditional Chinese) you have written. Your response must strictly follow this JSON format:
@@ -200,7 +230,7 @@ def gpt_generate(round_number, participant_decision):
     
 ########################################################################################################################
 
-def gpt_judge(reasoning_1, reasoning_2, is_flipped_value):  
+def gpt_judge(experimental_rules, reasoning_1, reasoning_2, is_flipped_value):  
     if is_flipped_value:
         reasons = [reasoning_2, reasoning_1]
     else:
@@ -238,11 +268,7 @@ def gpt_judge(reasoning_1, reasoning_2, is_flipped_value):
         - If the reasoning becomes hollow or lacks substance once these terms are removed, the reasoning should receive a lower evaluation.
 
     ### Experimental instruction:
-        * Part II consists of 10 rounds. At the beginning, the computer randomly divides all participants into two equal groups.
-        * In each round, you must choose an integer between 0 and 100.
-        * The average of all numbers chosen by participants in your group is called the "Average Number."
-        * The person whose choice is closest to **0.7 times the Average Number** (called the "Target Number") is the winner of the round. In the event of a tie, the computer will randomly select one winner.
-        * Before each round begins, the computer will display the past "Average Number" and "Target Number" for your group.
+        {experimental_rules}
 
     ### Response Format:        
         The following are two reasonings for a decision. Please evaluate them based on the judge criterion and prohibition above.
@@ -287,88 +313,6 @@ def gpt_judge(reasoning_1, reasoning_2, is_flipped_value):
 
 ########################################################################################################################
 
-#def set_payoffs(subsession: Subsession):
-#    all_players = subsession.get_players()
-
-#    for p in all_players:
-#        human_reason = ""
-#        human_decision = None
-#        phase2_payoff = cu(0)
-
-#        if subsession.round_number in C.reasoning_rounds:
-#            p.winner_type = "Processing"
-#            p.gpt_reason = "Processing"
-
-#            raw_reason = p.participant.vars.get(f"reason_{p.round_number}")
-#            human_reason = str(raw_reason).strip() if raw_reason else ""
-#            human_decision = p.participant.vars.get(f'decision_{p.round_number}')
-#            phase2_payoff = p.participant.vars.get(f'payoff_{p.round_number}', cu(0))
-
-#            print(f"=====回合 {p.round_number} - 受試者{p.id_in_subsession} =====")
-#            print(f"human_decision: {human_decision}")
-#            print(f"human_reason: '{human_reason}'")
-           
-#            if human_reason and human_decision is not None:
-#                wait_time = (p.id_in_subsession - 1)*0.5
-#                time.sleep(wait_time)
-#                print(f"受試者{p.id_in_subsession} 正在呼叫API")
-
-#                try:
-#                    generated_reason = gpt_generate(human_decision)
-#                    p.gpt_reason = str(generated_reason).strip()
-
-#                    time.sleep(1)
-
-#                    p.winner_type, p.gpt_analysis = gpt_judge(human_reason, p.gpt_reason)
-
-#                    if p.winner_type == "Human":
-#                        p.payoff = cu(C.Pass_Reward) - phase2_payoff # payoff in oTree is cumulative
-#                    else:
-#                        p.payoff = - phase2_payoff
-#                    print(f"API呼叫完成 - winner: {p.winner_type}")
-#                except Exception as e:
-#                    print(f"API呼叫失敗: {e}")
-#                    p.gpt_reason = "API error"
-#                    p.winner_type = "Error"
-#                    p.payoff = phase2_payoff
-#            else:
-#                p.gpt_reason = "No data"
-#                p.winner_type = "No data"
-#                p.payoff = phase2_payoff
-#        else:
-#            print(f"-回合{p.round_number} 非額外說明回合")
-#            p.winner_type = ""
-#            p.gpt_reason = ""
-#            p.payoff = cu(0)
-
-#        if p.round_number == 1:
-#            p.participant.vars["reason_history"] = []
-
-#        if p.round_number in C.reasoning_rounds:
-#            current_history = p.participant.vars.get("reason_history", [])
-
-#            if not any(d.get("round") == p.round_number for d in current_history):
-#                current_history.append({
-#                    "round": p.round_number,
-#                    "human_reason": human_reason,
-#                    "gpt_reason": p.gpt_reason if p.gpt_reason != "Processing" else "API error",
-#                    "winner": p.winner_type,
-#                    "gpt_analysis": p.gpt_analysis
-#                })
-#        else:
-#            if not any(d.get("round") == p.round_number for d in current_history):
-#                current_history.append({
-#                    "round": p.round_number,
-#                    "human_reason": "",
-#                    "gpt_reason": "",
-#                    "winner": None,
-#                    "gpt_analysis": ""
-#                    })
-
-#        p.participant.vars["reason_history"] = current_history
-
-########################################################################################################################
-
 # pages
 
 class InstructionPage(Page):
@@ -388,7 +332,7 @@ class ProcessingPage(Page):
                 p_vars = dict(player.participant.vars)
                 p_vars["id_in_subsession"] = player.id_in_subsession
 
-                t = threading.Thread(target = player.gpt_process, args = (p_vars,))
+                t = threading.Thread(target = player.gpt_process, args = (p_vars, ))
                 t.daemon = True
                 t.start()
             return {player.id_in_group: {"status": "started"}}
@@ -396,24 +340,48 @@ class ProcessingPage(Page):
         if data.get("type") == "check_status":
             global _thread_storage
             p_id = player.id_in_subsession
-
             output = _thread_storage.get(p_id)
             
             if output:
                 if output.get("status") == "already_finished":
                     player.is_gpt_finished = True
                     return {player.id_in_group: {"status": "finished"}}
+                
                 if output.get("status") == "done":
-                    player.participant.vars["total_phase2_payoff"] = output["total_phase2_payoff"]
-                    player.participant.vars["reason_history"] = output["history"]
+                    data = output["data"]
 
-                    for r, vals in output["round_data"].items():
-                        target = player.in_round(r)
-                        target.is_flipped = vals["is_flipped"]
-                        target.gpt_reason = vals["gpt_reason"]
-                        target.gpt_analysis = vals["gpt_analysis"]
-                        target.winner_type = vals["winner_type"]
-                        target.payoff = vals["payoff"]
+                    for key, val in data.items():
+                        player.participant.vars[key] = val
+
+                    total_adj = {r: cu(0) for r in C.reasoning_rounds}
+
+                    for config in C.PHASE_CONFIG:
+                        phase_id = config["payoff_prefix"]
+                        prefix = config["var_prefix"]
+
+                        if phase_id in output["db"]:
+                            phase_rounds = output["db"][phase_id]
+                            
+                            for r, vals in phase_rounds.items():
+                                target = player.in_round(r)
+
+                                setattr(target, f"is_flipped{prefix}", vals["is_flipped"])
+                                setattr(target, f"gpt_reason{prefix}", vals["gpt_reason"])
+                                setattr(target, f"gpt_analysis{prefix}", vals["gpt_analysis"])
+                                setattr(target, f"winner_type{prefix}", vals["winner_type"])
+
+                                adj_val = vals.get("payoff_adj")
+                                setattr(target, f"payoff_adj{prefix}", adj_val)
+
+                                total_adj[r] += adj_val
+                        
+                    for r, final_adj in total_adj.items():
+                        player.in_round(r).payoff = final_adj
+
+                    player.participant.vars["reason_history"] = data["reason_history"]
+                    player.participant.vars["reason_history_2"] = data["reason_history_2"]
+                    player.participant.vars["total_phase2_payoff"] = data["total_phase2_payoff"]
+                    player.participant.vars["total_phase3_payoff"] = data["total_phase3_payoff"]
 
                     player.is_gpt_finished = True
 
@@ -431,41 +399,16 @@ class Results(Page):
     @staticmethod
     def vars_for_template(player):
         reason_history = player.participant.vars.get("reason_history", [])
+        reason_history_2 = player.participant.vars.get("reason_history_2", [])
         total_phase2_payoff = player.participant.vars.get("total_phase2_payoff")
+        total_phase3_payoff = player.participant.vars.get("total_phase3_payoff")
 
         return {
             "reason_history": reason_history,
-            "total_phase2_payoff": total_phase2_payoff
+            "reason_history_2": reason_history_2,
+            "total_phase2_payoff": total_phase2_payoff,
+            "total_phase3_payoff": total_phase3_payoff
         }
-
-#        for p in player_history:
-#            is_luckywinner = p.participant.vars.get(f'is_luckywinner_{p.round_number}')
-            
-#            extra_data.append({
-#                'round': p.round_number,
-#                'is_luckywinner': "是" if is_luckywinner else "否",
-#                'result': "您的理由較好" if p.winner_type == "Human" else "AI生成的理由較好",
-#                "round_payoff": p.payoff 
-#            })
-            
-#        return {
-#            'extra_data': extra_data,
-#            "total_payoff": player.participant.payoff
-#        }
-    
-#    def after_all_players_arrive(group):
-#        for p in group.get_players():
-#            reason_history = []
-            
-#            for r in C.reasoning_rounds:
-#                p_in_r = p.in_round(r)
-#                reason_history.append({
-#                    "round": int(r),
-#                    "reason": p_in_r.reason,
-#                    "gpt_reason": p_in_r.gpt_reason
-#                })
-
-#            p.participant.vars["reason_history"] = reason_history
 
 
 
