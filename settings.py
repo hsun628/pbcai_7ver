@@ -15,15 +15,15 @@ num_participant = int(environ.get("NUM_PARTICIPANT", 7))
 # -------------------
 SESSION_CONFIGS = [
     dict(
-        name = 'pbcai-7ver',
-        display_name = "pbcai-7ver",
+        name = 'pbcai_7ver',
+        display_name = "pbcai_7ver",
         num_demo_participants = 4 if DEBUG else num_participant,
         app_sequence = ['phase1', 'phase2', 'phase3', 'phase_AI','after_questionaire'],
     ),
 ]
 
 SESSION_CONFIG_DEFAULTS = dict(
-    display_name = "pbcai-7ver",
+    display_name = "pbcai_7ver",
     real_world_currency_per_point = 1.00,
     participation_fee = 150.00,
     doc="",
